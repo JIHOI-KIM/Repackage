@@ -105,11 +105,17 @@ def FindSmali(folderName, mainAct) :
         print(steps[-1], file)
         if re.search(steps[-1], file) :
             targetFiles.append(file)
+    
+    for i in range(0, len(targetFiles)) :
+        if re.search("_mod\.smali", targetFiles[i]) :
+            print("|... Mod smali already exist. Try to Overwrite it.")
+            del targetFiles[i]
+
 
     if len(targetFiles) == 0:
         print("|... Cannot find any related file!")
         return None
-    print("|... Find %d Target smali file", len(targetFiles))
+    print("|... Find %d Target smali file" % len(targetFiles))
     
     for file in targetFiles :
         print("| - File [%s]" % file)
@@ -125,7 +131,7 @@ def FindEntrySmali(smaliList, mainAct) :
         filePointer = open(file,"rt")
         data = filePointer.read()
         if re.search(targetStr, data) :
-            print("| Find onCreate() in smali file [%s]" % file)
+            print("| ... Find onCreate() in smali file [%s]" % file)
             result.append(file)
             
     if len(result) == 0 :
@@ -137,8 +143,108 @@ def FindEntrySmali(smaliList, mainAct) :
     
     return result[0]
     
+def ListMethods(entrySmali, target = "onCreate") :
+    print("ListMethods [%s]" % entrySmali)
+    filePointer = open(entrySmali)
+    rawLines = filePointer.readlines()
+    filePointer.close()
+    
+    methods = []
+    current = []
+    for line in rawLines :
+        if re.search("\.method", line) :
+            current = []
+        if re.search("\.end method", line) :
+            methods.append(current)
+        current.append(line)
+       
+    methodNum = 0
+    for method in methods :
+        if re.search("\.method", method[0]) :
+            methodNum = methodNum + 1
+       
+    if methodNum == 0 :
+        print("| ... Err : Cannot find any methods from [%s]" % entrySmali)
+        return None
+        
+    print("| ... Find %d methods from [%s]" %(methodNum, entrySmali))
+    return methods
+
+def getScript(preBlank) :
+    scripts = []
+    
+    script1 = "const-string v0, \"dummy\""
+    script2 = "invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V"
+    script3 = "invoke-static {v0, v0}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;)I"
+    
+    scripts.append(script1)
+    scripts.append(script2)
+    scripts.append(script3)
+    
+    str = ""
+    for script in scripts :
+        str = str + preBlank + script + "\n"
+    
+    return str
+
+def ConvertFunction(entrySmali, methodList, target="onCreate") :
+    print("ConvertFunction [%s] ..." % entrySmali)
+    targetMethod = None
+    for methods in methodList :
+        if re.search(target+"\(", methods[0]) :
+            targetMethod = methods
+            break
+    
+    if targetMethod == None :
+        print("| ... Cannot find method [%s] from [%s]" % (target, entrySmali))
+        return None
+    
+    print("| ... Find method [%s], %s lines" % (targetMethod[0].strip(), len(targetMethod)))
+    
+    v0 = 0
+    for index in range(0, len(targetMethod)) :
+        if re.search("return-void", targetMethod[index]) :
+            v0 = v0+1
+            blanks = 0
+            for i in range(0, len(targetMethod[index])) :
+                if targetMethod[index][i] == " " :
+                    blanks = blanks + 1
+            preBlank = " "*blanks
+            
+            targetMethod[index] = getScript(preBlank) + targetMethod[index]
+
+        
+    if v0 == 0 :
+        print("| ... Cannot find \"return-void\" in method %s" % target)
+        return None
+        
+    print("| ... Convert %s return into Script" % v0)
+    
+    return methodList
+    
+def WriteBack(entrySmali, methodList, overwrite="_mod.smali") :
+    
+    output = re.sub("\.smali", overwrite, entrySmali);
+    print("WriteBack [%s]" % output)
+    filePointer = open(output, "wt")
+    
+    for method in methodList :
+        for line in method :
+            filePointer.writelines(line)
+    
+    filePointer.close()
+    print("| ... Writing all codes into %s" % output)
+    
+    return output
+    
+    
 def Analyze(folderName) :
     print("Analyze [%s] ..." %folderName)
+    outPath = None
+    
+    if not os.path.isdir(folderName) :
+        print("Error : Wrong folder name | " + usage)
+        return
 
     while True :
         maniPath = FindManifest(folderName)
@@ -151,12 +257,20 @@ def Analyze(folderName) :
         if smaliList == None or len(smaliList) == 0 :
             break
         entrySmali = FindEntrySmali(smaliList, mainAct)  
-        print(entrySmali)
-            
+        if entrySmali == None :
+            break
+        methodList = ListMethods(entrySmali)
+        if methodList == None or len(methodList) == 0 :
+            break
+        methodList = ConvertFunction(entrySmali, methodList)
+        if methodList == None or len(methodList) == 0 :
+            break
+        outPath = WriteBack(entrySmali, methodList)
+        
         break
     
-    print("Analyze end")
-    return
+    print("Analyze end. [%s] Created" % outPath)
+    return outPath
 
 def main() :
     usage = "Usage: %prog [target APK folder]"
@@ -165,11 +279,7 @@ def main() :
         print(usage)
         sys.exit()
     folderName = sys.argv[1]
-       
-    if not os.path.isdir(folderName) :
-        print("Error : Wrong folder name | " + usage)
-        sys.exit()
-        
+           
     Analyze(folderName)
         
 if __name__  == "__main__" :
